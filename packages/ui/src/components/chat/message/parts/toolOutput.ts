@@ -153,6 +153,48 @@ export const getToolOutput = (
     return undefined;
 };
 
+/** One line fits a collapsed tool row; the full reason is in the tooltip and the output. */
+const MAX_FAILURE_DETAIL_LENGTH = 300;
+/** Only the end of a command's output can hold its last line. */
+const FAILURE_DETAIL_TAIL_LENGTH = 16_384;
+
+/** A detail may run past the row; the tooltip and the expanded body keep the whole text. */
+const cappedDetail = (text: string): string => (
+    text.length > MAX_FAILURE_DETAIL_LENGTH
+        ? `${text.slice(0, MAX_FAILURE_DETAIL_LENGTH).trimEnd()}…`
+        : text
+);
+
+/**
+ * The one line a failed call shows in its collapsed row.
+ *
+ * A shell command's error text only says how it ended (`exited (1)`), so the
+ * reason is the last line of the same normalized output the expanded body
+ * shows: sudo, ls and friends print it there. Every other tool carries the
+ * reason in `error`.
+ */
+export const getToolFailureDetail = (
+    tool: string,
+    error: string,
+    output: string | undefined,
+): string => {
+    if (isShellTool(tool) && output !== undefined) {
+        const tail = output.length > FAILURE_DETAIL_TAIL_LENGTH
+            ? output.slice(-FAILURE_DETAIL_TAIL_LENGTH)
+            : output;
+        const lastLine = tail
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0)
+            .pop();
+        if (lastLine) {
+            return cappedDetail(lastLine);
+        }
+    }
+
+    return cappedDetail(error.trim());
+};
+
 export const getStreamingOutputAppend = (previous: string, next: string): string | undefined => {
     return next.startsWith(previous) ? next.slice(previous.length) : undefined;
 };
