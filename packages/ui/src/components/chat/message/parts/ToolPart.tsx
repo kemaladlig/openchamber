@@ -77,7 +77,7 @@ import {
 } from './toolDiffUtils';
 import { useChatColumnActions } from '@/components/chat/chatColumnSession';
 import { useStreamingTextThrottle } from '../../hooks/useStreamingTextThrottle';
-import { getStreamingOutputAppend, getToolFailureDetail, getToolOutput } from './toolOutput';
+import { getStreamingOutputAppend, getToolOutput } from './toolOutput';
 import { toAbsoluteFilePath } from '@/lib/path-utils';
 import { hasTextSelectionInside } from '@/lib/textSelection';
 import { dispatchRowExpand } from '@/components/chat/lib/scroll/timelineScrollIntent';
@@ -128,6 +128,8 @@ interface ToolPartProps {
     alwaysShowActions?: boolean;
     onShowPopup?: (content: ToolPopupContent) => void;
     animateTailText?: boolean;
+    /** Why a failed row failed, shown while it stays collapsed. Only `!command` rows pass one. */
+    failureReason?: string;
 }
 
 // A finished run shows tenths; a running one counts whole seconds on the
@@ -1587,6 +1589,7 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
     isMobile,
     onShowPopup,
     animateTailText = true,
+    failureReason,
     header,
     subagentSessionId: taskSessionId,
 }) => {
@@ -1748,15 +1751,8 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
     const description = guestHeader?.subtitle ?? builtInDescription;
     const displayName = guestHeader?.title ?? getToolMetadata(normalizedPartTool || part.tool).displayName;
 
-    // A failed row says why while it stays collapsed; opened, the body already
-    // carries the whole error and output.
-    const failureDetail = React.useMemo(() => {
-        if (!isError || isExpanded || !('error' in state)) {
-            return '';
-        }
-        const output = getToolOutput(part.tool, stateWithData.output, metadata?.output, status);
-        return getToolFailureDetail(part.tool, coerceToText(state.error), output);
-    }, [isError, isExpanded, metadata, part.tool, state, stateWithData.output, status]);
+    // Opened, the body already carries the whole error and output.
+    const failureDetail = isError && !isExpanded ? failureReason : undefined;
 
     // Tool title/description — shown inline as context. A subtitle the
     // extension declared replaces it, since both land in the same slot.
@@ -2367,5 +2363,6 @@ export default React.memo(ToolPart, (prev, next) => {
         && prev.isMobile === next.isMobile
         && prev.alwaysShowActions === next.alwaysShowActions
         && prev.onShowPopup === next.onShowPopup
-        && prev.animateTailText === next.animateTailText;
+        && prev.animateTailText === next.animateTailText
+        && prev.failureReason === next.failureReason;
 });

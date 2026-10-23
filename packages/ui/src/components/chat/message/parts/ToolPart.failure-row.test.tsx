@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createRoot } from 'react-dom/client';
 import { Window } from 'happy-dom';
 import { OpenCode } from '@opencode/client';
-import type { ToolPart as ToolPartData } from '@/lib/opencode/model';
+import type { Message, ToolPart as ToolPartData } from '@/lib/opencode/model';
 import { SyncProvider } from '@/sync/sync-context';
 import { I18nProvider } from '@/lib/i18n';
 
@@ -21,20 +21,22 @@ plugin({
 });
 
 const { default: ToolPart } = await import('./ToolPart');
+const { TimelineNotice } = await import('../TimelineNotice');
 
-const shellPart = (error: string, output?: string): ToolPartData => ({
-  id: 'prt_shell_failure', sessionID: 'ses_shell_failure', messageID: 'msg_shell_failure',
-  type: 'tool', tool: 'shell', callID: 'call_shell_failure',
-  state: { status: 'error', input: { command: 'sudo true' }, error, output, metadata: {}, time: { start: 1, end: 2 } },
+type ShellMessage = Extract<Message, { role: 'shell' }>;
+
+const shellMessage = (fields: Pick<ShellMessage, 'command' | 'status'> & Partial<ShellMessage>): Message => ({
+  id: 'msg_shell_failure',
+  sessionID: 'ses_shell_failure',
+  role: 'shell',
+  shellID: 'shl_failure',
+  time: { created: 1, completed: 2 },
+  ...fields,
 });
 
-const readPart = (error: string): ToolPartData => ({
-  id: 'prt_read_failure', sessionID: 'ses_read_failure', messageID: 'msg_read_failure',
-  type: 'tool', tool: 'read', callID: 'call_read_failure',
-  state: { status: 'error', input: { filePath: './missing.ts' }, error, metadata: {}, time: { start: 1, end: 2 } },
-});
+const shellOutput = (output: string): ShellMessage['output'] => ({ output, cursor: output.length, size: output.length, truncated: false });
 
-const renderRow = async (part: ToolPartData, isExpanded: boolean, run: (container: HTMLElement) => void) => {
+const render = async (element: React.ReactElement, run: (container: HTMLElement) => void) => {
   const happyWindow = new Window({ url: 'http://localhost' });
   const globals = {
     window: happyWindow,
@@ -74,9 +76,7 @@ const renderRow = async (part: ToolPartData, isExpanded: boolean, run: (containe
     await act(async () => {
       root.render(
         <SyncProvider sdk={sdk} directory="">
-          <I18nProvider>
-            <ToolPart part={part} isExpanded={isExpanded} isMobile={false} onToggle={() => {}} />
-          </I18nProvider>
+          <I18nProvider>{element}</I18nProvider>
         </SyncProvider>,
       );
     });
@@ -91,35 +91,79 @@ const renderRow = async (part: ToolPartData, isExpanded: boolean, run: (containe
   }
 };
 
-test('a failed shell row shows the reason its command printed, collapsed', async () => {
-  const output = 'Password:\nsudo: a terminal is required to read the password\n';
-  await renderRow(shellPart('exited (1)', output), false, (container) => {
-    expect(container.textContent).toContain('sudo: a terminal is required to read the password');
+test('a failed !command row shows the reason its command printed, collapsed', async () => {
+  const message = shellMessage({
+    command: 'sudo true',
+    status: 'exited',
+    exit: 1,
+    output: shellOutput('sudo: a terminal is required to read the password\nsudo: a password is required\n'),
+  });
+  await render(<TimelineNotice message={message} />, (container) => {
     expect(container.textContent).toContain('sudo true');
+    expect(container.textContent).toContain('sudo: a password is required');
   });
 });
 
-test('a failed shell row reads output that arrived in metadata, collapsed', async () => {
-  const output = 'ls: cannot access \'/nonexistent\': No such file or directory\n';
+test('a !command that printed nothing shows how it ended, collapsed', async () => {
+  const message = shellMessage({ command: 'false', status: 'exited', exit: 1, output: shellOutput('') });
+  await render(<TimelineNotice message={message} />, (container) => {
+    expect(container.textContent).toContain('exited (1)');
+  });
+});
+
+test('a timed out !command shows that it timed out, not its last progress line', async () => {
+  const message = shellMessage({ command: 'make', status: 'timeout', output: shellOutput('Compiling 34/120\n') });
+  await render(<TimelineNotice message={message} />, (container) => {
+    expect(container.textContent).toContain('timeout');
+    expect(container.textContent).not.toContain('Compiling 34/120');
+  });
+});
+
+test('a !command whose output was truncated shows how it ended, not a line from the middle', async () => {
+  const message = shellMessage({
+    command: 'seq 1 300000; false',
+    status: 'exited',
+    exit: 1,
+    output: { output: '1\n2\n16566\n', cursor: 10, size: 2_000_000, truncated: true },
+  });
+  await render(<TimelineNotice message={message} />, (container) => {
+    expect(container.textContent).toContain('exited (1)');
+    expect(container.textContent).not.toContain('16566');
+  });
+});
+
+test('a failed agent tool row shows no reason line, collapsed', async () => {
   const part: ToolPartData = {
-    id: 'prt_shell_metadata', sessionID: 'ses_shell_metadata', messageID: 'msg_shell_metadata',
-    type: 'tool', tool: 'shell', callID: 'call_shell_metadata',
-    state: { status: 'error', input: { command: 'ls /nonexistent' }, error: 'exited (2)', metadata: { output }, time: { start: 1, end: 2 } },
+    id: 'prt_agent_shell', sessionID: 'ses_agent_shell', messageID: 'msg_agent_shell',
+    type: 'tool', tool: 'shell', callID: 'call_agent_shell',
+    state: {
+      status: 'error',
+      input: { command: 'make' },
+      error: 'Tool execution aborted',
+      metadata: { output: 'Compiling 34/120\n', interrupted: true },
+      time: { start: 1, end: 2 },
+    },
   };
-  await renderRow(part, false, (container) => {
-    expect(container.textContent).toContain('ls: cannot access \'/nonexistent\': No such file or directory');
+  await render(<ToolPart part={part} isExpanded={false} isMobile={false} onToggle={() => {}} />, (container) => {
+    expect(container.textContent).toContain('make');
+    expect(container.textContent).not.toContain('Compiling 34/120');
+    expect(container.textContent).not.toContain('Tool execution aborted');
   });
 });
 
-test('a failed tool that is not a shell shows its own error, collapsed', async () => {
-  await renderRow(readPart('File not found: ./missing.ts'), false, (container) => {
-    expect(container.textContent).toContain('File not found: ./missing.ts');
+test('an expanded failed row leaves its reason to the body', async () => {
+  const part: ToolPartData = {
+    id: 'prt_shell_expanded', sessionID: 'ses_shell_expanded', messageID: 'msg_shell_expanded',
+    type: 'tool', tool: 'shell', callID: 'call_shell_expanded',
+    state: { status: 'error', input: { command: 'sudo true' }, error: 'exited (1)', output: '', time: { start: 1, end: 2 } },
+  };
+  const row = (isExpanded: boolean) => (
+    <ToolPart part={part} isExpanded={isExpanded} isMobile={false} onToggle={() => {}} failureReason="header reason" />
+  );
+  await render(row(false), (container) => {
+    expect(container.textContent).toContain('header reason');
   });
-});
-
-test('an expanded failed row shows its error once', async () => {
-  await renderRow(readPart('File not found: ./missing.ts'), true, (container) => {
-    const shown = (container.textContent ?? '').split('File not found').length - 1;
-    expect(shown).toBe(1);
+  await render(row(true), (container) => {
+    expect(container.textContent).not.toContain('header reason');
   });
 });

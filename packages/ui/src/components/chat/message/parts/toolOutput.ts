@@ -153,46 +153,29 @@ export const getToolOutput = (
     return undefined;
 };
 
-/** One line fits a collapsed tool row; the full reason is in the tooltip and the output. */
-const MAX_FAILURE_DETAIL_LENGTH = 300;
+/** One line fits a collapsed tool row; the whole line is in the expanded output. */
+const MAX_LAST_LINE_LENGTH = 300;
 /** Only the end of a command's output can hold its last line. */
-const FAILURE_DETAIL_TAIL_LENGTH = 16_384;
-
-/** A detail may run past the row; the tooltip and the expanded body keep the whole text. */
-const cappedDetail = (text: string): string => (
-    text.length > MAX_FAILURE_DETAIL_LENGTH
-        ? `${text.slice(0, MAX_FAILURE_DETAIL_LENGTH).trimEnd()}…`
-        : text
-);
+const LAST_LINE_TAIL_LENGTH = 16_384;
 
 /**
- * The one line a failed call shows in its collapsed row.
- *
- * A shell command's error text only says how it ended (`exited (1)`), so the
- * reason is the last line of the same normalized output the expanded body
- * shows: sudo, ls and friends print it there. Every other tool carries the
- * reason in `error`.
+ * The last non-empty line a command printed, as the terminal shows it, capped
+ * to fit one row. A failed command prints its reason there: sudo, ls and
+ * friends end with it.
  */
-export const getToolFailureDetail = (
-    tool: string,
-    error: string,
-    output: string | undefined,
-): string => {
-    if (isShellTool(tool) && output !== undefined) {
-        const tail = output.length > FAILURE_DETAIL_TAIL_LENGTH
-            ? output.slice(-FAILURE_DETAIL_TAIL_LENGTH)
-            : output;
-        const lastLine = tail
-            .split('\n')
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0)
-            .pop();
-        if (lastLine) {
-            return cappedDetail(lastLine);
-        }
+export const getLastOutputLine = (output: string): string | undefined => {
+    const tail = output.length > LAST_LINE_TAIL_LENGTH ? output.slice(-LAST_LINE_TAIL_LENGTH) : output;
+    const lastLine = renderTerminalOutput(tail)
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .pop();
+    if (!lastLine) {
+        return undefined;
     }
-
-    return cappedDetail(error.trim());
+    return lastLine.length > MAX_LAST_LINE_LENGTH
+        ? `${lastLine.slice(0, MAX_LAST_LINE_LENGTH).trimEnd()}…`
+        : lastLine;
 };
 
 export const getStreamingOutputAppend = (previous: string, next: string): string | undefined => {

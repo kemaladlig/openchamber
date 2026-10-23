@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { getStreamingOutputAppend, getToolFailureDetail, getToolOutput, renderTerminalOutput } from './toolOutput';
+import { getLastOutputLine, getStreamingOutputAppend, getToolOutput, renderTerminalOutput } from './toolOutput';
 import { readTaskTagSessionIdFromOutput } from './taskSessionIdParser';
 import { parseDiffToUnified, tryParseJsonOutput } from '../toolRenderers';
 import { getStreamingThrottleText } from '../../hooks/useStreamingTextThrottle';
@@ -41,38 +41,30 @@ describe('getToolOutput', () => {
     });
 });
 
-describe('getToolFailureDetail', () => {
-    test('shows a failed shell command last output line, not its exit status', () => {
-        const output = 'Password:\nsudo: a terminal is required to read the password\n';
-        expect(getToolFailureDetail('shell', 'exited (1)', output))
-            .toBe('sudo: a terminal is required to read the password');
+describe('getLastOutputLine', () => {
+    test('returns the last non-empty line a command printed', () => {
+        const output = 'sudo: a terminal is required to read the password\nsudo: a password is required\n\n';
+        expect(getLastOutputLine(output)).toBe('sudo: a password is required');
     });
 
-    test('reads the last line of the output the expanded body shows', () => {
-        const raw = '\u001B[33mPassword:\u001B[0m\n\u001B[31msudo: a password is required\u001B[0m\n';
-        const output = getToolOutput('shell', raw, undefined, 'error');
-        expect(getToolFailureDetail('shell', 'exited (1)', output)).toBe('sudo: a password is required');
+    test('reads the line as the terminal shows it', () => {
+        const output = '\u001B[33mPassword:\u001B[0m\n\u001B[31msudo: a password is required\u001B[0m\n';
+        expect(getLastOutputLine(output)).toBe('sudo: a password is required');
     });
 
     test('finds the last line at the end of a long output', () => {
-        const output = `${'x'.repeat(20_000)}\nreal reason\n`;
-        expect(getToolFailureDetail('shell', 'exited (1)', output)).toBe('real reason');
+        expect(getLastOutputLine(`${'x'.repeat(20_000)}\nreal reason\n`)).toBe('real reason');
     });
 
-    test('falls back to the error when the command printed nothing', () => {
-        expect(getToolFailureDetail('shell', 'exited (1)', '')).toBe('exited (1)');
-        expect(getToolFailureDetail('shell', 'exited (1)', undefined)).toBe('exited (1)');
-    });
-
-    test('keeps the error for other tools instead of their output', () => {
-        expect(getToolFailureDetail('read', 'File not found: ./missing.ts', 'some output'))
-            .toBe('File not found: ./missing.ts');
+    test('returns nothing when the command printed nothing', () => {
+        expect(getLastOutputLine('')).toBeUndefined();
+        expect(getLastOutputLine('\n  \n')).toBeUndefined();
     });
 
     test('caps a long line', () => {
-        const detail = getToolFailureDetail('shell', 'exited (1)', `${'x'.repeat(400)}\n`);
-        expect(detail.length).toBe(301);
-        expect(detail.endsWith('…')).toBe(true);
+        const line = getLastOutputLine(`${'x'.repeat(400)}\n`);
+        expect(line?.length).toBe(301);
+        expect(line?.endsWith('…')).toBe(true);
     });
 });
 
